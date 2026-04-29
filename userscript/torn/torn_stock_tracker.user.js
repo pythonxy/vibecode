@@ -1,20 +1,21 @@
 // ==UserScript==
-// @name         Torn Stock Tracker
+// @name         Torn Item Stock Tracker
 // @namespace    https://www.torn.com/
-// @version      1.3.0
-// @description  Track item stock prices from droqsdb.com on Torn, auto-refreshes every 30s. Works on Tampermonkey and TornPDA.
-// @author       You
+// @version      1.5.4
+// @description  Track item stock prices with dynamic height and spinning refresh.
+// @author       pythonxyz [3923535]
 // @match        https://www.torn.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @connect      droqsdb.com
+// @downloadURL https://github.com/pythonxy/vibecode/raw/refs/heads/main/userscript/torn/torn_stock_tracker.user.js
+// @updateURL https://github.com/pythonxy/vibecode/raw/refs/heads/main/userscript/torn/torn_stock_tracker.user.js
 // ==/UserScript==
 
 (function () {
   'use strict';
 
-  // ─── Storage: works in both Tampermonkey and TornPDA ────────────────────────
   var store = {
     get: function (key, def) {
       try {
@@ -31,7 +32,6 @@
     }
   };
 
-  // ─── HTTP: falls back to fetch if GM_xmlhttpRequest unavailable ─────────────
   function httpGet(url, onload, onerror) {
     if (typeof GM_xmlhttpRequest !== 'undefined') {
       GM_xmlhttpRequest({
@@ -41,373 +41,171 @@
         ontimeout: function () { onerror('Request timed out'); }
       });
     } else {
-      fetch(url, { signal: AbortSignal.timeout ? AbortSignal.timeout(10000) : undefined })
-        .then(function (r) {
-          return r.text().then(function (t) { onload(r.status, t); });
-        })
-        .catch(function (e) { onerror(e.message || 'Network error'); });
+      fetch(url).then(r => r.text().then(t => onload(r.status, t))).catch(e => onerror(e.message));
     }
   }
 
-  // ─── Saved state ────────────────────────────────────────────────────────────
-  var savedItem    = store.get('tst_item',    'Xanax');
-  var savedCountry = store.get('tst_country', 'Japan');
-  var isExpanded   = store.get('tst_expanded', true);
-  var savedX       = store.get('tst_x', null);
-  var savedY       = store.get('tst_y', null);
+  var savedItem = store.get('tst_item', 'Xanax');
+  var isExpanded = store.get('tst_expanded', true);
+  var savedX = store.get('tst_x', null);
+  var savedY = store.get('tst_y', null);
 
-  // ─── Inject styles ──────────────────────────────────────────────────────────
   var style = document.createElement('style');
   style.textContent = [
-    /* Widget shell */
-    '#tst-widget{position:fixed;z-index:99999;font-family:"Courier New",monospace;font-size:12px;width:270px;border-radius:6px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,.55);border:1px solid #3a3a3a;user-select:none;-webkit-user-select:none;transition:width .25s ease,height .25s ease,border-radius .25s ease;}',
-
-    /* Minimized: circle */
-    '#tst-widget.minimized{width:46px!important;height:46px!important;border-radius:50%!important;border-color:#2a2a2a;box-shadow:0 2px 14px rgba(0,0,0,.65);}',
-    '#tst-widget.minimized #tst-header{width:46px;height:46px;padding:0;justify-content:center;border-bottom:none;border-radius:50%;}',
-    '#tst-widget.minimized #tst-header-title{display:none;}',
-    '#tst-widget.minimized #tst-header-right{display:none;}',
-    '#tst-widget.minimized #tst-body{display:none!important;}',
-
-    /* ST bubble label */
-    '#tst-bubble-label{display:none;font-size:13px;font-weight:bold;color:#e8c84a;letter-spacing:1px;pointer-events:none;font-family:"Courier New",monospace;}',
+    '#tst-widget{position:fixed;z-index:99999;font-family:"Courier New",monospace;width:400px;background:#111;border-radius:6px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,.55);border:1px solid #3a3a3a;user-select:none;height:auto;min-height:0;}',
+    '#tst-widget.minimized{width:46px!important;height:46px!important;min-height:46px!important;border-radius:50%!important;cursor:pointer;}',
+    '#tst-widget.minimized #tst-header{width:46px;height:46px;padding:0;justify-content:center;border-bottom:none;background: #1a1a1a;}',
+    '#tst-widget.minimized #tst-header-title, #tst-widget.minimized #tst-header-right, #tst-widget.minimized #tst-body{display:none!important;}',
+    '#tst-bubble-label{display:none;font-size:13px;font-weight:bold;color:#e8c84a;pointer-events:none;}',
     '#tst-widget.minimized #tst-bubble-label{display:block;}',
-
-    /* Mini status dot */
-    '#tst-pulse-mini{position:absolute;top:5px;right:5px;width:7px;height:7px;border-radius:50%;background:#4caf50;animation:tst-pulse 2s infinite;display:none;}',
-    '#tst-widget.minimized #tst-pulse-mini{display:block;}',
-
-    '#tst-widget.dragging{opacity:.85;box-shadow:0 8px 32px rgba(0,0,0,.7);}',
-
-    /* Header */
-    '#tst-header{position:relative;display:flex;align-items:center;justify-content:space-between;background:#1a1a1a;padding:7px 10px;cursor:grab;border-bottom:1px solid #333;}',
-    '#tst-header:active{cursor:grabbing;}',
-
-    '#tst-header-title{color:#e8c84a;font-weight:bold;font-size:12px;letter-spacing:1px;text-transform:uppercase;display:flex;align-items:center;gap:6px;pointer-events:none;}',
-
-    /* Pulse dot */
-    '#tst-pulse{width:7px;height:7px;border-radius:50%;background:#4caf50;animation:tst-pulse 2s infinite;flex-shrink:0;}',
-    '#tst-pulse.error{background:#e53935;animation:none;}',
-    '#tst-pulse.loading{background:#e8c84a;animation:tst-pulse .6s infinite;}',
-    '@keyframes tst-pulse{0%,100%{opacity:1}50%{opacity:.3}}',
-
-    '#tst-header-right{display:flex;align-items:center;gap:8px;pointer-events:none;}',
-    '#tst-drag-hint{color:#444;font-size:10px;letter-spacing:1px;}',
-
-    '#tst-toggle-btn{color:#888;font-size:14px;line-height:1;padding:0 2px;transition:color .15s;pointer-events:all;cursor:pointer;-webkit-tap-highlight-color:transparent;}',
-    '#tst-toggle-btn:hover{color:#e8c84a;}',
-
-    /* Body */
-    '#tst-body{background:#111;display:flex;flex-direction:column;}',
-
-    '#tst-inputs{display:flex;gap:6px;padding:8px 10px 6px;border-bottom:1px solid #222;}',
-
-    '.tst-input{flex:1;min-width:0;background:#1e1e1e;border:1px solid #333;border-radius:4px;color:#ddd;font-family:"Courier New",monospace;font-size:11px;padding:4px 6px;outline:none;transition:border-color .15s;user-select:text;-webkit-user-select:text;}',
-    '.tst-input:focus{border-color:#e8c84a;}',
-    '.tst-input::placeholder{color:#555;}',
-
-    '#tst-fetch-btn{background:#e8c84a;color:#111;border:none;border-radius:4px;font-family:"Courier New",monospace;font-size:11px;font-weight:bold;padding:4px 8px;cursor:pointer;transition:background .15s;white-space:nowrap;-webkit-tap-highlight-color:transparent;}',
-    '#tst-fetch-btn:hover{background:#f5d96a;}',
-
-    '#tst-refresh-btn{background:transparent;color:#555;border:1px solid #2a2a2a;border-radius:3px;font-size:13px;padding:1px 5px;cursor:pointer;transition:color .15s,border-color .15s;line-height:1;-webkit-tap-highlight-color:transparent;}',
-    '#tst-refresh-btn:hover{color:#e8c84a;border-color:#e8c84a;}',
-    '#tst-refresh-btn.spinning{animation:tst-spin .6s linear infinite;}',
-    '@keyframes tst-spin{to{transform:rotate(360deg)}}',
-
-    '#tst-output{padding:8px 10px 10px;min-height:40px;}',
-
-    '.tst-row{display:flex;justify-content:space-between;padding:2px 0;border-bottom:1px solid #1e1e1e;}',
-    '.tst-row:last-child{border-bottom:none;}',
-    '.tst-label{color:#888;}',
-    '.tst-value{color:#e0e0e0;font-weight:bold;}',
-    '.tst-value.green{color:#66bb6a;}',
-    '.tst-value.yellow{color:#e8c84a;}',
-    '.tst-value.red{color:#ef5350;}',
-
-    '.tst-section-title{color:#e8c84a;letter-spacing:1px;font-size:10px;text-transform:uppercase;margin-bottom:6px;margin-top:2px;}',
-    '.tst-error{color:#ef5350;font-size:11px;}',
-    '.tst-loading{color:#e8c84a;font-size:11px;}',
-
-    '#tst-footer{display:flex;justify-content:space-between;align-items:center;padding:4px 10px 5px;border-top:1px solid #1e1e1e;background:#0d0d0d;}',
-    '#tst-countdown{color:#555;font-size:10px;}',
-    '#tst-last-update{color:#444;font-size:10px;}',
-
-    /* Touch-friendly tap targets on mobile */
-    '@media(pointer:coarse){#tst-toggle-btn{padding:4px 6px;}#tst-fetch-btn{padding:6px 10px;}#tst-refresh-btn{padding:4px 8px;font-size:15px;}}',
+    '#tst-header{background:#1a1a1a;padding:7px 10px;cursor:grab;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #333;}',
+    '#tst-header-title{color:#e8c84a;font-weight:bold;display:flex;align-items:center;gap:6px;font-size:12px;}',
+    '#tst-pulse{width:7px;height:7px;border-radius:50%;background:#4caf50;}',
+    '.loading#tst-pulse{background:#e8c84a;animation:tst-p 0.6s infinite;}',
+    '.error#tst-pulse{background:#ef5350;}',
+    '@keyframes tst-p{0%,100%{opacity:1}50%{opacity:.3}}',
+    '#tst-toggle-btn{color:#888;cursor:pointer;font-size:14px;padding:0 4px;}',
+    '#tst-body{display:flex;flex-direction:column;}',
+    '#tst-inputs{display:flex;gap:6px;padding:8px 10px;border-bottom:1px solid #222;}',
+    '.tst-input{flex:1;background:#1e1e1e;border:1px solid #333;border-radius:4px;color:#ddd;padding:4px 6px;outline:none;font-size:11px;}',
+    '#tst-fetch-btn{background:#e8c84a;color:#111;border:none;border-radius:4px;font-weight:bold;padding:4px 10px;cursor:pointer;}',
+    '#tst-output{padding:5px 10px 10px; max-height: 350px; overflow-y: auto;}',
+    '#tst-output::-webkit-scrollbar {width: 4px;}',
+    '#tst-output::-webkit-scrollbar-thumb {background: #333; border-radius: 2px;}',
+    '.tst-table{width:100%;border-collapse:collapse;font-size:11px;}',
+    '.tst-table th{text-align:left;color:#e8c84a;font-size:10px;padding:5px 2px;border-bottom:1px solid #333; position: sticky; top: 0; background: #111;}',
+    '.tst-table td{padding:5px 2px;border-bottom:1px solid #1a1a1a;color:#e0e0e0;}',
+    '.green{color:#66bb6a!important;} .yellow{color:#e8c84a!important;} .red{color:#ef5350!important;}',
+    '#tst-footer{display:flex;justify-content:space-between;padding:4px 10px;background:#0d0d0d;font-size:10px;color:#444;border-top:1px solid #1e1e1e;}',
+    '#tst-refresh-btn{background:transparent;border:1px solid #2a2a2a;color:#555;cursor:pointer; transition: color .15s;}',
+    '#tst-refresh-btn.spinning{animation: tst-spin .6s linear infinite; color: #e8c84a;}',
+    '@keyframes tst-spin{to{transform:rotate(360deg)}}'
   ].join('');
   document.head.appendChild(style);
 
-  // ─── Build widget DOM ────────────────────────────────────────────────────────
   var widget = document.createElement('div');
   widget.id = 'tst-widget';
-  widget.innerHTML =
-    '<div id="tst-header">' +
-      '<span id="tst-bubble-label">ST</span>' +
-      '<span id="tst-pulse-mini"></span>' +
-      '<div id="tst-header-title">' +
-        '<span id="tst-pulse"></span>' +
-        'Stock Tracker' +
-      '</div>' +
-      '<div id="tst-header-right">' +
-        '<span id="tst-drag-hint">⠿ drag</span>' +
-        '<span id="tst-toggle-btn">▼</span>' +
-      '</div>' +
-    '</div>' +
-    '<div id="tst-body">' +
-      '<div id="tst-inputs">' +
-        '<input class="tst-input" id="tst-item-input"    placeholder="Item"    value="' + savedItem    + '" />' +
-        '<input class="tst-input" id="tst-country-input" placeholder="Country" value="' + savedCountry + '" />' +
-        '<button id="tst-fetch-btn">GO</button>' +
-      '</div>' +
-      '<div id="tst-output"><div class="tst-loading">Fetching data…</div></div>' +
-      '<div id="tst-footer">' +
-        '<span id="tst-countdown">Next refresh: 30s</span>' +
-        '<button id="tst-refresh-btn" title="Force refresh">↻</button>' +
-        '<span id="tst-last-update"></span>' +
-      '</div>' +
-    '</div>';
+  widget.innerHTML = `
+    <div id="tst-header">
+      <span id="tst-bubble-label">ST</span>
+      <div id="tst-header-title"><span id="tst-pulse"></span>Stock Tracker</div>
+      <div id="tst-header-right"><span id="tst-toggle-btn">▼</span></div>
+    </div>
+    <div id="tst-body">
+      <div id="tst-inputs">
+        <input class="tst-input" id="tst-item-input" placeholder="Item" value="${savedItem}" />
+        <button id="tst-fetch-btn">GO</button>
+      </div>
+      <div id="tst-output"></div>
+      <div id="tst-footer">
+        <span id="tst-countdown">30s</span>
+        <button id="tst-refresh-btn">↻</button>
+        <span id="tst-last-update"></span>
+      </div>
+    </div>`;
   document.body.appendChild(widget);
 
-  // ─── Position ────────────────────────────────────────────────────────────────
-  function applyPosition(x, y) {
-    widget.style.left   = x + 'px';
-    widget.style.top    = y + 'px';
-    widget.style.bottom = 'auto';
-    widget.style.right  = 'auto';
-  }
+  var header = widget.querySelector('#tst-header');
+  var body = widget.querySelector('#tst-body');
+  var toggleBtn = widget.querySelector('#tst-toggle-btn');
+  var output = widget.querySelector('#tst-output');
+  var itemInput = widget.querySelector('#tst-item-input');
+  var pulse = widget.querySelector('#tst-pulse');
+  var refreshBtn = widget.querySelector('#tst-refresh-btn');
 
-  if (savedX !== null && savedY !== null) {
-    applyPosition(savedX, savedY);
-  } else {
-    widget.style.bottom = '18px';
-    widget.style.left   = '18px';
-  }
+  function applyPos(x, y) { widget.style.left = x + 'px'; widget.style.top = y + 'px'; }
+  if (savedX !== null) applyPos(savedX, savedY); else { widget.style.bottom='20px'; widget.style.left='20px'; }
 
-  // ─── Element refs ────────────────────────────────────────────────────────────
-  var body         = widget.querySelector('#tst-body');
-  var toggleBtn    = widget.querySelector('#tst-toggle-btn');
-  var header       = widget.querySelector('#tst-header');
-  var itemInput    = widget.querySelector('#tst-item-input');
-  var countryInput = widget.querySelector('#tst-country-input');
-  var fetchBtn     = widget.querySelector('#tst-fetch-btn');
-  var refreshBtn   = widget.querySelector('#tst-refresh-btn');
-  var output       = widget.querySelector('#tst-output');
-  var pulse        = widget.querySelector('#tst-pulse');
-  var pulseMini    = widget.querySelector('#tst-pulse-mini');
-  var countdownEl  = widget.querySelector('#tst-countdown');
-  var lastUpdateEl = widget.querySelector('#tst-last-update');
-
-  // ─── Expand / minimize ───────────────────────────────────────────────────────
-  function setExpanded(expanded) {
-    isExpanded = expanded;
-    store.set('tst_expanded', expanded);
-    if (expanded) {
-      widget.classList.remove('minimized');
-      body.style.display    = 'flex';
-      toggleBtn.textContent = '▼';
+  function setExpanded(exp) {
+    isExpanded = exp; store.set('tst_expanded', exp);
+    if (exp) {
+        widget.classList.remove('minimized');
+        body.style.display = 'flex';
+        toggleBtn.textContent = '▼';
     } else {
-      widget.classList.add('minimized');
-      body.style.display    = 'none';
-      toggleBtn.textContent = '▲';
+        widget.classList.add('minimized');
+        body.style.display = 'none';
+        toggleBtn.textContent = '▲';
     }
   }
   setExpanded(isExpanded);
 
-  // ─── Pulse helper ────────────────────────────────────────────────────────────
-  function setPulse(cls) {
-    pulse.className = cls;
-    var color = cls === 'error' ? '#e53935' : cls === 'loading' ? '#e8c84a' : '#4caf50';
-    pulseMini.style.background = color;
-    pulseMini.style.animation  = cls === 'error' ? 'none' : '';
+  var isDragging = false, dx = 0, dy = 0, didDrag = false;
+  function start(e) {
+    if (e.target === toggleBtn || e.target.tagName === 'INPUT' || e.target.tagName === 'BUTTON') return;
+    isDragging = true; didDrag = false;
+    var r = widget.getBoundingClientRect();
+    var cx = e.touches ? e.touches[0].clientX : e.clientX;
+    var cy = e.touches ? e.touches[0].clientY : e.clientY;
+    dx = cx - r.left; dy = cy - r.top;
   }
-
-  // ─── Drag (mouse + touch) ────────────────────────────────────────────────────
-  var isDragging  = false;
-  var dragOffsetX = 0;
-  var dragOffsetY = 0;
-  var didDrag     = false;
-
-  function dragStart(clientX, clientY) {
-    isDragging  = true;
-    didDrag     = false;
-    var rect    = widget.getBoundingClientRect();
-    dragOffsetX = clientX - rect.left;
-    dragOffsetY = clientY - rect.top;
-    widget.classList.add('dragging');
-  }
-
-  function dragMove(clientX, clientY) {
+  function move(e) {
     if (!isDragging) return;
     didDrag = true;
-    var x = clientX - dragOffsetX;
-    var y = clientY - dragOffsetY;
-    x = Math.max(0, Math.min(x, window.innerWidth  - widget.offsetWidth));
-    y = Math.max(0, Math.min(y, window.innerHeight - widget.offsetHeight));
-    applyPosition(x, y);
+    var cx = e.touches ? e.touches[0].clientX : e.clientX;
+    var cy = e.touches ? e.touches[0].clientY : e.clientY;
+    var x = cx - dx, y = cy - dy;
+    applyPos(x, y);
+    if (e.cancelable) e.preventDefault();
   }
-
-  function dragEnd() {
+  function end() {
     if (!isDragging) return;
     isDragging = false;
-    widget.classList.remove('dragging');
     if (didDrag) {
-      var rect = widget.getBoundingClientRect();
-      store.set('tst_x', rect.left);
-      store.set('tst_y', rect.top);
-      savedX = rect.left; savedY = rect.top;
+      var r = widget.getBoundingClientRect();
+      store.set('tst_x', r.left); store.set('tst_y', r.top);
     }
   }
 
-  // Mouse
-  header.addEventListener('mousedown', function (e) {
-    if (e.target === toggleBtn) return;
-    dragStart(e.clientX, e.clientY);
-    e.preventDefault();
-  });
-  document.addEventListener('mousemove', function (e) { dragMove(e.clientX, e.clientY); });
-  document.addEventListener('mouseup',   dragEnd);
+  header.addEventListener('mousedown', start);
+  header.addEventListener('touchstart', start, {passive: false});
+  window.addEventListener('mousemove', move);
+  window.addEventListener('touchmove', move, {passive: false});
+  window.addEventListener('mouseup', end);
+  window.addEventListener('touchend', end);
 
-  // Touch
-  header.addEventListener('touchstart', function (e) {
-    if (e.target === toggleBtn) return;
-    dragStart(e.touches[0].clientX, e.touches[0].clientY);
-  }, { passive: true });
-  document.addEventListener('touchmove', function (e) {
-    if (!isDragging) return;
-    dragMove(e.touches[0].clientX, e.touches[0].clientY);
-    e.preventDefault();
-  }, { passive: false });
-  document.addEventListener('touchend', dragEnd);
-
-  // ─── Toggle click / tap ──────────────────────────────────────────────────────
-  header.addEventListener('click', function (e) {
-    if (e.target === toggleBtn) return;
+  header.addEventListener('click', (e) => {
     if (didDrag) return;
-    if (!isExpanded) setExpanded(true);
-  });
-  toggleBtn.addEventListener('click', function (e) {
-    e.stopPropagation();
-    setExpanded(!isExpanded);
+    if (e.target === toggleBtn || !isExpanded) setExpanded(!isExpanded);
   });
 
-  // ─── Countdown ───────────────────────────────────────────────────────────────
-  var countdown = 30;
-  var countdownInterval = null;
-
-  function startCountdown() {
-    clearInterval(countdownInterval);
-    countdown = 30;
-    countdownEl.textContent = 'Next refresh: 30s';
-    countdownInterval = setInterval(function () {
-      countdown--;
-      countdownEl.textContent = 'Next refresh: ' + countdown + 's';
-      if (countdown <= 0) { clearInterval(countdownInterval); fetchData(); }
-    }, 1000);
-  }
-
-  // ─── Fetch ───────────────────────────────────────────────────────────────────
-  function toTitleCase(str) {
-    return str.trim().replace(/\w\S*/g, function (w) {
-      return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
-    });
-  }
+  var count = 30;
+  setInterval(() => {
+    if (isExpanded) {
+        count--;
+        widget.querySelector('#tst-countdown').textContent = count + 's';
+        if (count <= 0) fetchData();
+    }
+  }, 1000);
 
   function fetchData() {
-    var itemName    = toTitleCase(itemInput.value    || savedItem);
-    var countryName = toTitleCase(countryInput.value || savedCountry);
-    store.set('tst_item', itemName);
-    store.set('tst_country', countryName);
-    savedItem = itemName; savedCountry = countryName;
-
-    setPulse('loading');
+    var item = itemInput.value.trim() || 'Xanax';
+    pulse.className = 'loading';
     refreshBtn.classList.add('spinning');
-    output.innerHTML = '<div class="tst-loading">Fetching ' + itemName + ' / ' + countryName + '…</div>';
 
-    httpGet(
-      'https://droqsdb.com/api/public/v1/item/' + encodeURIComponent(itemName),
-      function (status, text) {
-        if (status !== 200) { showError(itemName + ': ' + countryName + ' not found'); return; }
-        try {
-          var data      = JSON.parse(text);
-          var countries = (data && data.item && data.item.countries) || [];
-          var entry     = null;
-          for (var i = 0; i < countries.length; i++) {
-            if (countries[i].country === countryName) { entry = countries[i]; break; }
-          }
-          if (!entry) { showError('No stock info found for ' + itemName + ' in ' + countryName + '.'); return; }
-          renderEntry(countryName, entry);
-          setPulse('');
-          refreshBtn.classList.remove('spinning');
-          lastUpdateEl.textContent = 'Updated ' + new Date().toLocaleTimeString();
-          startCountdown();
-        } catch (err) { showError('Parse error: ' + err.message); }
-      },
-      function (msg) { showError(msg); }
-    );
-  }
-
-  function showError(msg) {
-    setPulse('error');
-    refreshBtn.classList.remove('spinning');
-    output.innerHTML = '<div class="tst-error">⚠ ' + msg + '</div>';
-    startCountdown();
-  }
-
-  function colorClass(val, type) {
-    if (val == null) return '';
-    if (type === 'profit') return val > 0 ? 'green' : val < 0 ? 'red' : '';
-    if (type === 'stock')  return val > 50 ? 'green' : val > 10 ? 'yellow' : 'red';
-    return '';
-  }
-
-  function fmt(val) {
-    if (val == null) return '—';
-    if (typeof val === 'number') return val.toLocaleString();
-    return val;
-  }
-
-  function renderEntry(country, e) {
-    var rows = [
-      { label: 'Source',       value: fmt(e.source),                  cls: '' },
-      { label: 'Stock',        value: fmt(e.stock),                   cls: colorClass(e.stock, 'stock') },
-      { label: 'Restock',      value: fmt(e.estimatedRestockDisplay), cls: '' },
-      { label: 'Buy Price',    value: e.buyPrice    != null ? '$' + fmt(e.buyPrice)    : '—', cls: '' },
-      { label: 'Market Price', value: e.marketValue != null ? '$' + fmt(e.marketValue) : '—', cls: '' },
-      { label: 'Bazaar Price', value: e.bazaarPrice != null ? '$' + fmt(e.bazaarPrice) : '—', cls: '' },
-      { label: 'Profit/Item',  value: e.profitPerItem   != null ? '$' + fmt(e.profitPerItem)   : '—', cls: colorClass(e.profitPerItem, 'profit') },
-      { label: 'Profit/Min',   value: e.profitPerMinute != null ? '$' + fmt(e.profitPerMinute) : '—', cls: colorClass(e.profitPerMinute, 'profit') },
-    ];
-    var html = '<div class="tst-section-title">' + country.toUpperCase() + '</div>';
-    for (var i = 0; i < rows.length; i++) {
-      html += '<div class="tst-row"><span class="tst-label">' + rows[i].label +
-              '</span><span class="tst-value ' + rows[i].cls + '">' + rows[i].value + '</span></div>';
-    }
-    output.innerHTML = html;
-  }
-
-  // ─── Button events ───────────────────────────────────────────────────────────
-  fetchBtn.addEventListener('click', function (e) {
-    e.stopPropagation();
-    clearInterval(countdownInterval);
-    fetchData();
-  });
-
-  refreshBtn.addEventListener('click', function (e) {
-    e.stopPropagation();
-    clearInterval(countdownInterval);
-    fetchData();
-  });
-
-  widget.querySelector('#tst-inputs').addEventListener('mousedown',  function (e) { e.stopPropagation(); });
-  widget.querySelector('#tst-inputs').addEventListener('touchstart', function (e) { e.stopPropagation(); }, { passive: true });
-
-  [itemInput, countryInput].forEach(function (inp) {
-    inp.addEventListener('keydown', function (e) {
-      if (e.key === 'Enter') { e.stopPropagation(); clearInterval(countdownInterval); fetchData(); }
+    httpGet('https://droqsdb.com/api/public/v1/item/' + encodeURIComponent(item), (status, text) => {
+      count = 30;
+      refreshBtn.classList.remove('spinning');
+      if (status !== 200) { pulse.className = 'error'; return; }
+      try {
+        var countries = JSON.parse(text).item.countries;
+        var h = '<table class="tst-table"><thead><tr><th>Country</th><th>Stock</th><th>Restock</th><th>Price</th><th>$/Min</th></tr></thead><tbody>';
+        countries.forEach(e => {
+            var sCls = e.stock > 50 ? 'green' : e.stock > 10 ? 'yellow' : 'red';
+            var pCls = e.profitPerMinute > 0 ? 'green' : e.profitPerMinute < 0 ? 'red' : '';
+            h += `<tr><td>${e.country.toUpperCase()}</td><td class="${sCls}">${e.stock}</td><td>${e.estimatedRestockDisplay || '—'}</td><td>$${e.buyPrice.toLocaleString()}</td><td class="${pCls}">${e.profitPerMinute ? '$'+e.profitPerMinute.toLocaleString() : '—'}</td></tr>`;
+        });
+        output.innerHTML = h + '</tbody></table>';
+        pulse.className = '';
+        widget.querySelector('#tst-last-update').textContent = new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+      } catch(e) { pulse.className = 'error'; }
+    }, () => {
+        pulse.className = 'error';
+        refreshBtn.classList.remove('spinning');
     });
-  });
+  }
 
-  // ─── Initial fetch ───────────────────────────────────────────────────────────
+  widget.querySelector('#tst-fetch-btn').onclick = fetchData;
+  refreshBtn.onclick = fetchData;
   fetchData();
-
 })();
