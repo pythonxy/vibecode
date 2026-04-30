@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         Torn Item Stock Tracker
+// @name         Torn Foreign stock Tracker
 // @namespace    https://www.torn.com/
-// @version      1.5.4
+// @version      1.5.5
 // @description  Track item stock prices with dynamic height and spinning refresh.
 // @author       pythonxyz [3923535]
 // @match        https://www.torn.com/*
