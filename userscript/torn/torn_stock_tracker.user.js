@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         Torn Foreign stock Tracker
+// @name         Torn Foreign Stock Tracker
 // @namespace    https://www.torn.com/
-// @version      1.5.5
+// @version      1.5.6
 // @description  Track item stock prices with dynamic height and spinning refresh.
 // @author       pythonxyz [3923535]
 // @match        https://www.torn.com/*
@@ -88,7 +88,7 @@
   widget.innerHTML = `
     <div id="tst-header">
       <span id="tst-bubble-label">ST</span>
-      <div id="tst-header-title"><span id="tst-pulse"></span>Stock Tracker</div>
+      <div id="tst-header-title"><span id="tst-pulse"></span>Foreign Stock Tracker</div>
       <div id="tst-header-right"><span id="tst-toggle-btn">▼</span></div>
     </div>
     <div id="tst-body">
