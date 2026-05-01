@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn Foreign Stock Tracker
 // @namespace    https://www.torn.com/
-// @version      1.5.6
+// @version      1.5.7
 // @description  Track item stock prices with dynamic height and spinning refresh.
 // @author       pythonxyz [3923535]
 // @match        https://www.torn.com/*
@@ -207,5 +207,9 @@
 
   widget.querySelector('#tst-fetch-btn').onclick = fetchData;
   refreshBtn.onclick = fetchData;
-  fetchData();
+  if (document.readyState === 'complete') {
+    fetchData();
+  } else {
+      window.addEventListener('load', fetchData);
+  }
 })();
