@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Torn Foreign Stock Tracker
 // @namespace    https://www.torn.com/
-// @version      2.0.1
-// @description  Track item stock prices with dynamic height and spinning refresh.
+// @version      2.0.3
+// @description  Track item stock restock time.
 // @author       pythonxyz [3923535]
 // @match        https://www.torn.com/*
 // @match        https://torn.com/*
@@ -35,7 +35,7 @@
   }
  
   // ─── Storage (GM → localStorage → in-memory fallback) ────────────────────────
-  var _mem = {};
+  var _mem = { tst_item: 'Xanax', tst_expanded: false };
   var store = {
     get: function (key, def) {
       try { if (typeof GM_getValue !== 'undefined') return GM_getValue(key, def); } catch (e) {}
@@ -349,8 +349,8 @@
       }
  
       var sorted = countries.slice().sort(function (a, b) {
-        var av = (a.profitPerMinute != null) ? a.profitPerMinute : -999999999;
-        var bv = (b.profitPerMinute != null) ? b.profitPerMinute : -999999999;
+        var av = (a.profitPerItem != null) ? a.profitPerItem : -999999999;
+        var bv = (b.profitPerItem != null) ? b.profitPerItem : -999999999;
         return bv - av;
       });
  
@@ -360,20 +360,20 @@
         '<th class="num">Stock</th>' +
         '<th class="num">Restock</th>' +
         '<th class="num">Price</th>' +
-        '<th class="num">$/Min</th>' +
+        '<th class="num">Profit</th>' +
         '</tr></thead><tbody>';
  
       for (var i = 0; i < sorted.length; i++) {
         var c  = sorted[i];
         var sc = stockClass(c.stock);
-        var pc = profitClass(c.profitPerMinute);
+        var pc = profitClass(c.profitPerItem);
         html +=
           '<tr>' +
           '<td class="country">' + (c.country || '\u2014').toUpperCase() + '</td>' +
           '<td class="num ' + sc + '">' + fmtNum(c.stock) + '</td>' +
           '<td class="num">' + (c.estimatedRestockDisplay || '\u2014') + '</td>' +
           '<td class="num">' + fmtMoney(c.buyPrice) + '</td>' +
-          '<td class="num ' + pc + '">' + fmtMoney(c.profitPerMinute) + '</td>' +
+          '<td class="num ' + pc + '">' + fmtMoney(c.profitPerItem) + '</td>' +
           '</tr>';
       }
  
